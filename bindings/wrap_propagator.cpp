@@ -10,12 +10,30 @@
 #include "gravity.h"
 #include "integrator.h"
 #include "propagator.h"
+#include "numerics.h"
 
 namespace py = pybind11;
 using namespace leo_propagator;
 
 PYBIND11_MODULE(_leo_propagator, m) {
-    m.doc() = "LEO Orbit Propagator - High precision satellite orbit simulation engine";
+    m.doc() = "LEO Orbit Propagator - High precision satellite orbit simulation engine "
+              "with Kahan summation and RK45 adaptive step integrators";
+
+    py::enum_<IntegratorType>(m, "IntegratorType")
+        .value("RK4", IntegratorType::RK4)
+        .value("HIGH_PRECISION_RK4", IntegratorType::HIGH_PRECISION_RK4)
+        .value("RK45_ADAPTIVE", IntegratorType::RK45_ADAPTIVE)
+        .export_values();
+
+    py::class_<KahanSum>(m, "KahanSum")
+        .def(py::init<>())
+        .def(py::init<double>())
+        .def("add", &KahanSum::add)
+        .def("value", &KahanSum::value)
+        .def("reset", py::overload_cast<>(&KahanSum::reset))
+        .def("reset", py::overload_cast<double>(&KahanSum::reset))
+        .def("__iadd__", &KahanSum::operator+=)
+        .def("__float__", &KahanSum::operator double);
 
     py::class_<Vector3>(m, "Vector3")
         .def(py::init<>())
@@ -35,7 +53,7 @@ PYBIND11_MODULE(_leo_propagator, m) {
         .def("__sub__", &Vector3::operator-)
         .def("__mul__", &Vector3::operator*)
         .def("__repr__", [](const Vector3& v) {
-            return "Vector3(" + std::to_string(v.x) + ", " + 
+            return "Vector3(" + std::to_string(v.x) + ", " +
                    std::to_string(v.y) + ", " + std::to_string(v.z) + ")";
         });
 
@@ -83,6 +101,29 @@ PYBIND11_MODULE(_leo_propagator, m) {
         .def("integrate", &RK4Integrator::integrate)
         .def_property("step_size", &RK4Integrator::getStepSize, &RK4Integrator::setStepSize);
 
+    py::class_<HighPrecisionRK4>(m, "HighPrecisionRK4")
+        .def(py::init<double>(), py::arg("step_size") = 1.0)
+        .def("step", &HighPrecisionRK4::step)
+        .def("integrate", &HighPrecisionRK4::integrate)
+        .def_property("step_size", &HighPrecisionRK4::getStepSize, &HighPrecisionRK4::setStepSize)
+        .doc() = "RK4 integrator with Kahan compensated summation for high precision";
+
+    py::class_<RK45Integrator>(m, "RK45Integrator")
+        .def(py::init<double, double, double, double>(),
+            py::arg("rel_tol") = 1e-12,
+            py::arg("abs_tol") = 1e-15,
+            py::arg("max_step") = 60.0,
+            py::arg("min_step") = 1e-9)
+        .def("integrate", &RK45Integrator::integrate)
+        .def("set_relative_tolerance", &RK45Integrator::setRelativeTolerance)
+        .def("set_absolute_tolerance", &RK45Integrator::setAbsoluteTolerance)
+        .def("set_max_step", &RK45Integrator::setMaxStep)
+        .def("set_min_step", &RK45Integrator::setMinStep)
+        .def("get_last_step_size", &RK45Integrator::getLastStepSize)
+        .def("get_total_steps", &RK45Integrator::getTotalSteps)
+        .def("get_rejected_steps", &RK45Integrator::getRejectedSteps)
+        .doc() = "Dormand-Prince RK45 adaptive step size integrator with error control";
+
     py::class_<OrbitResult>(m, "OrbitResult")
         .def(py::init<>())
         .def_readwrite("positions", &OrbitResult::positions)
@@ -90,6 +131,10 @@ PYBIND11_MODULE(_leo_propagator, m) {
         .def_readwrite("times", &OrbitResult::times)
         .def_readwrite("norad_id", &OrbitResult::norad_id)
         .def_readwrite("satellite_name", &OrbitResult::satellite_name)
+        .def_readwrite("integrator_used", &OrbitResult::integrator_used)
+        .def_readwrite("total_steps", &OrbitResult::total_steps)
+        .def_readwrite("rejected_steps", &OrbitResult::rejected_steps)
+        .def_readwrite("compute_time", &OrbitResult::compute_time)
         .def("get_positions_array", [](const OrbitResult& self) {
             size_t n = self.positions.size();
             py::array_t<double> arr({n, 3});
@@ -123,20 +168,34 @@ PYBIND11_MODULE(_leo_propagator, m) {
         });
 
     py::class_<OrbitPropagator>(m, "OrbitPropagator")
-        .def(py::init<double, bool>(), 
-            py::arg("step_size") = 1.0, py::arg("use_j2") = true)
+        .def(py::init<double, bool, IntegratorType>(),
+            py::arg("step_size") = 1.0,
+            py::arg("use_j2") = true,
+            py::arg("integrator_type") = IntegratorType::HIGH_PRECISION_RK4)
         .def("propagate_tle", &OrbitPropagator::propagateTLE,
             py::arg("tle"), py::arg("duration_days") = 7.0)
         .def("propagate_state", &OrbitPropagator::propagateState,
             py::arg("initial_state"), py::arg("duration_seconds"))
         .def("set_step_size", &OrbitPropagator::setStepSize)
-        .def("set_use_j2", &OrbitPropagator::setUseJ2);
+        .def("set_use_j2", &OrbitPropagator::setUseJ2)
+        .def("set_integrator_type", &OrbitPropagator::setIntegratorType)
+        .def("get_integrator_type", &OrbitPropagator::getIntegratorType)
+        .def("set_rkf45_tolerances", &OrbitPropagator::setRKF45Tolerances,
+            py::arg("rel_tol"), py::arg("abs_tol"))
+        .def("set_rkf45_step_limits", &OrbitPropagator::setRKF45StepLimits,
+            py::arg("max_step"), py::arg("min_step"));
 
     py::class_<BatchPropagator>(m, "BatchPropagator")
-        .def(py::init<double, bool>(),
-            py::arg("step_size") = 1.0, py::arg("use_j2") = true)
+        .def(py::init<double, bool, IntegratorType>(),
+            py::arg("step_size") = 1.0,
+            py::arg("use_j2") = true,
+            py::arg("integrator_type") = IntegratorType::HIGH_PRECISION_RK4)
         .def("propagate_batch", &BatchPropagator::propagateBatch,
             py::arg("tles"), py::arg("duration_days") = 7.0)
         .def("set_step_size", &BatchPropagator::setStepSize)
-        .def("set_use_j2", &BatchPropagator::setUseJ2);
+        .def("set_use_j2", &BatchPropagator::setUseJ2)
+        .def("set_integrator_type", &BatchPropagator::setIntegratorType);
+
+    m.attr("__version__") = "2.0.0";
+    m.attr("__precision_fix__") = "Kahan summation + RK45 adaptive step";
 }

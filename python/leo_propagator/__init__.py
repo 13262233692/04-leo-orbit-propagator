@@ -13,9 +13,13 @@ try:
         TLEParser,
         GravityModel,
         RK4Integrator,
+        HighPrecisionRK4,
+        RK45Integrator,
         OrbitResult,
         OrbitPropagator,
         BatchPropagator,
+        KahanSum,
+        IntegratorType,
     )
     _CPP_AVAILABLE = True
 except ImportError:
@@ -24,7 +28,7 @@ except ImportError:
 from .scheduler import SatelliteScheduler, generate_mock_tles
 from .hdf5_writer import HDF5Writer, save_results_to_hdf5
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __all__ = [
     "Vector3",
     "State",
@@ -32,9 +36,13 @@ __all__ = [
     "TLEParser",
     "GravityModel",
     "RK4Integrator",
+    "HighPrecisionRK4",
+    "RK45Integrator",
     "OrbitResult",
     "OrbitPropagator",
     "BatchPropagator",
+    "KahanSum",
+    "IntegratorType",
     "SatelliteScheduler",
     "HDF5Writer",
     "save_results_to_hdf5",
